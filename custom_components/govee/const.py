@@ -19,6 +19,13 @@ CONF_SEGMENT_MODE: Final = "segment_mode"
 CONF_EXPOSE_TRANSPORT_ENTITIES: Final = "expose_transport_entities"
 CONF_ENABLE_MQTT_CONTROL: Final = "enable_mqtt_control"
 
+# Standalone water-detector (H5054) leak-poll interval (seconds). These RF-only
+# sensors deliver their trip only via the account warnMessage history (issue
+# #62); a leak surfaces with up to this much latency. Configurable because the
+# account API's rate limit is unverified (homebridge issue #543) — users with
+# many detectors may want to back off, while a single detector can poll faster.
+CONF_WATER_DETECTOR_POLL_INTERVAL: Final = "water_detector_poll_interval"
+
 # Extra LAN discovery targets for devices the local multicast scan can't reach —
 # e.g. Govee devices on a different VLAN/subnet than Home Assistant (issue #57).
 # Free-text list (comma / newline / space separated) of device IPs, broadcast
@@ -110,6 +117,13 @@ DEFAULT_EXPOSE_TRANSPORT_ENTITIES: Final = False
 DEFAULT_ENABLE_MQTT_CONTROL: Final = False
 DEFAULT_API_TEMPERATURE_UNIT: Final = "auto"
 DEFAULT_LAN_TARGETS: Final = ""
+DEFAULT_WATER_DETECTOR_POLL_INTERVAL: Final = 120  # seconds (2 minutes)
+
+# Bounds for the configurable water-detector poll interval (seconds). The lower
+# bound keeps the unverified account-API rate limit at arm's length; the upper
+# bound (1 hour) is the slowest that still makes a leak alert useful.
+MIN_WATER_DETECTOR_POLL_INTERVAL: Final = 60
+MAX_WATER_DETECTOR_POLL_INTERVAL: Final = 3600
 
 # Optimistic state handling
 # Grace window (seconds) during which API polls do NOT overwrite optimistic
