@@ -22,7 +22,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
-    UnitOfRatio,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -41,6 +40,15 @@ from .coordinator import GoveeCoordinator
 from .entity import GoveeEntity
 from .models import GoveeDevice
 from .models.device import GoveeLeakSensor, leak_sensor_device_info
+
+try:  # HA >= 2026.7 (CONCENTRATION_PARTS_PER_MILLION is deprecated there)
+    from homeassistant.const import UnitOfRatio
+
+    PARTS_PER_MILLION: str = UnitOfRatio.PARTS_PER_MILLION
+except ImportError:  # hacs.json still declares 2024.11.0 as the minimum
+    from homeassistant.const import CONCENTRATION_PARTS_PER_MILLION
+
+    PARTS_PER_MILLION = CONCENTRATION_PARTS_PER_MILLION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -380,7 +388,7 @@ class GoveeCO2Sensor(GoveeEntity, SensorEntity):
     _attr_translation_key = "sensor_co2"
     _attr_device_class = SensorDeviceClass.CO2
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfRatio.PARTS_PER_MILLION
+    _attr_native_unit_of_measurement = PARTS_PER_MILLION
 
     def __init__(
         self,
