@@ -12,6 +12,8 @@ from typing import Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
 
+from custom_components.govee.const import SKU_SEGMENT_OVERRIDES
+
 _LOGGER = logging.getLogger(__name__)
 
 # Leak sensor SKUs
@@ -1131,11 +1133,35 @@ class GoveeDevice:
 
     @property
     def segment_count(self) -> int:
-        """Get number of segments for RGBIC devices."""
+        """Get number of segments for RGBIC devices.
+
+        The Govee API may over-report segment counts for some SKUs (the H7075
+        reports ``elementRange.max=14`` — i.e. 15 — yet has only 3 physical
+        sections). ``SKU_SEGMENT_OVERRIDES`` is the authoritative source for
+        known SKUs; ``fields[].size.max`` is a defensive clamp for any future
+        SKU the override table hasn't seen yet.
+        """
         for cap in self.capabilities:
             if cap.is_segment_color:
-                seg = SegmentCapability.from_capability({"parameters": cap.parameters})
-                return seg.segment_count if seg else 0
+                params = cap.parameters
+                seg = SegmentCapability.from_capability({"parameters": params})
+                api_count = seg.segment_count if seg else 0
+
+                # Defensive clamp: the API's size.max is the protocol-level
+                # array-size ceiling, which matches the physical sections on
+                # SKUs like the H7075 where elementRange.max over-reports.
+                size_max: int | None = None
+                for f in params.get("fields", []):
+                    if f.get("fieldName") == "segment":
+                        size = f.get("size") or {}
+                        if "max" in size:
+                            size_max = size["max"]
+                            break
+
+                effective = SKU_SEGMENT_OVERRIDES.get(self.sku.upper(), api_count)
+                if size_max is not None:
+                    effective = min(effective, size_max)
+                return effective
         return 0
 
     def get_capability(self, cap_type: str, instance: str) -> GoveeCapability | None:
