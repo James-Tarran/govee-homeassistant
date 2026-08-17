@@ -1485,3 +1485,17 @@ class TestSegmentCountOverride:
         device = _make_rgbic_device("H9999", cap)
         # No override → api_count (15) is clamped by size.max (3) → 3.
         assert device.segment_count == 3
+
+    def test_no_segment_capability_returns_zero(self):
+        """Device without any segment capability returns 0 (REQ-008 fallback).
+
+        Covers the ``return 0`` branch in GoveeDevice.segment_count when
+        no capability has ``is_segment_color=True``. Non-RGBIC lights and
+        grouped devices fall here.
+        """
+        cap = _make_rgbic_segment_capability(
+            element_range_max=None, size_max=None, segment_count=None,
+        )
+        device = _make_rgbic_device("H6000", cap)
+        # No segment capability → 0, not an exception.
+        assert device.segment_count == 0

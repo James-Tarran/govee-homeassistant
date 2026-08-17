@@ -2689,6 +2689,15 @@ style), a test case in `TestSegmentCountOverride`, and a release note.
 Follow the same workflow as `FAHRENHEIT_REPORTING_SKUS` in the same
 file (issues #115 / #128 / #129 are precedents).
 
+**Orphan entities after upgrading.** The first time an existing H7075
+install upgrades to a release that includes this fix, the entity
+registry keeps the 12 phantom `light.<name>_segment_{4..15}` entries
+that the previous (unfixed) version created. They have to be manually
+deleted from **Settings → Devices & Services → Entities** (filter by
+`<device>_segment`, select each, **Delete**). This is a one-time
+operation per affected device — the fix only prevents *future* phantom
+entities; it does not retroactively purge existing ones.
+
 Reference: see PR/issue placeholder for the H7075 fix.
 
 ---
