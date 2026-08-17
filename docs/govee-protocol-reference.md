@@ -2646,7 +2646,7 @@ For most SKUs the parser picks the first shape that yields a value, and
 over-report in `elementRange` while `size.max` matches the physical sections.**
 The H7075 is the first observed case: `elementRange.max = 14` (so the
 parser would return 15) but `size.max = 3` and the device really only has
-3 physical sections. Spawning 15 segment entities on a 3-section strip
+3 physical sections. Spawning 15 segment entities on a 3-section wall light
 produces 12 phantom `light.<name>_segment_{3..14}` entities that the
 cloud silently rejects, which then get stuck on whatever color the
 optimistic state happened to set.
