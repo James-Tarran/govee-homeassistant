@@ -85,6 +85,15 @@ FAHRENHEIT_REPORTING_SKUS: Final = frozenset(
 )
 
 
+# SKU-specific segment count overrides.
+# Some Govee devices report a higher segment count via the API than
+# the physical sections on the device. This dict pins the real count
+# per SKU. Add a new entry when the API is observed to misreport.
+SKU_SEGMENT_OVERRIDES: Final = {
+    "H7075": 3,  # API reports 15 (elementRange.max=14), device has 3 physical sections
+}
+
+
 def resolve_fahrenheit_conversion(
     sku: str, api_unit: str, device_unit_hint: str | None = None
 ) -> bool:
