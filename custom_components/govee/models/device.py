@@ -1135,11 +1135,19 @@ class GoveeDevice:
     def segment_count(self) -> int:
         """Get number of segments for RGBIC devices.
 
-        The Govee API may over-report segment counts for some SKUs (the H7075
-        reports ``elementRange.max=14`` — i.e. 15 — yet has only 3 physical
-        sections). ``SKU_SEGMENT_OVERRIDES`` is the authoritative source for
-        known SKUs; ``fields[].size.max`` is a defensive clamp for any future
-        SKU the override table hasn't seen yet.
+        Priority order:
+
+        1. ``SKU_SEGMENT_OVERRIDES`` — authoritative for known SKUs (e.g. H7075
+           has 3 physical sections even though the API reports 15).
+        2. ``fields[].size.max`` — defensive clamp on the API-reported count,
+           since ``size.max`` is the protocol-level array ceiling that matches
+           physical sections on devices where ``elementRange.max`` over-reports.
+        3. The parser's raw ``elementRange.max + 1`` (or ``segmentCount``).
+
+        The size.max clamp is applied to the API count *before* the override
+        lookup so unknown SKUs that follow the same over-reporting pattern as
+        the H7075 are caught automatically, while known SKUs still trust the
+        explicit override entry.
         """
         for cap in self.capabilities:
             if cap.is_segment_color:
@@ -1158,9 +1166,12 @@ class GoveeDevice:
                             size_max = size["max"]
                             break
 
-                effective = SKU_SEGMENT_OVERRIDES.get(self.sku.upper(), api_count)
+                # Apply size.max clamp first so it acts as an automatic
+                # safety net for unknown SKUs; then let SKU_SEGMENT_OVERRIDES
+                # override as the authoritative source for known ones.
                 if size_max is not None:
-                    effective = min(effective, size_max)
+                    api_count = min(api_count, size_max)
+                effective = SKU_SEGMENT_OVERRIDES.get(self.sku.upper(), api_count)
                 return effective
         return 0
 

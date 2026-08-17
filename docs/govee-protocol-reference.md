@@ -2652,27 +2652,28 @@ cloud silently rejects, which then get stuck on whatever color the
 optimistic state happened to set.
 
 The integration handles this with a two-layer correction in
-`custom_components/govee/models/device.py` (`GoveeDevice.segment_count`):
+`custom_components/govee/models/device.py` (`GoveeDevice.segment_count`),
+applied in this order:
 
-1. **Authoritative override.** `SKU_SEGMENT_OVERRIDES` (in
+1. **Defensive clamp on the API count.** When `fields[].size.max` is
+   present, the parser-derived count is clamped with
+   `min(api_count, size.max)`. This is the *automatic* safety net — it
+   catches any SKU that follows the H7075 over-reporting pattern without
+   requiring a manual dict entry. The H7075 itself would already come
+   out at 3 from this clamp alone; the override (step 2) makes the
+   intent explicit and survives API shape changes.
+
+2. **Authoritative override.** `SKU_SEGMENT_OVERRIDES` (in
    `custom_components/govee/const.py`) maps a SKU to the physical
    segment count, compared case-insensitively against `GoveeDevice.sku`.
-   When a SKU is present, the override wins regardless of what the API
-   returned for any of the three shapes. The first shipped entry is:
+   When a SKU is present, the override wins over any clamp-derived
+   value. The first shipped entry is:
 
    ```python
    SKU_SEGMENT_OVERRIDES: Final = {
        "H7075": 3,  # API reports 15 (elementRange.max=14), device has 3 physical sections
    }
    ```
-
-2. **Defensive clamp.** When `fields[].size.max` is present and the
-   effective count (override or API-derived) exceeds it, the property
-   returns `min(effective, size.max)`. This protects any future SKU that
-   exhibits the same bug but isn't in the override table yet — H7075
-   itself would already be capped to 3 by this clamp even without an
-   override entry, but the override makes the intent explicit and
-   survives API changes.
 
 The `govee.set_segment_color` service also validates its `segments` list
 against the same effective `segment_count` and logs a warning + early

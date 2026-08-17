@@ -1417,17 +1417,6 @@ class TestSegmentCountOverride:
         device = _make_rgbic_device("H6000", cap)
         assert device.segment_count == 15
 
-    def test_size_max_clamp_with_override(self, monkeypatch):
-        """When override > size.max, size.max wins (REQ-003)."""
-        import custom_components.govee.models.device as device_module
-
-        monkeypatch.setattr(
-            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 5},
-        )
-        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
-        device = _make_rgbic_device("H7075", cap)
-        assert device.segment_count == 3
-
     def test_sku_uppercase_normalization(self, monkeypatch):
         """SKU lookup is case-insensitive: 'h7075' resolves identically to 'H7075' (REQ-004)."""
         import custom_components.govee.models.device as device_module
@@ -1460,8 +1449,15 @@ class TestSegmentCountOverride:
         device = _make_rgbic_device("H7075", cap)
         assert device.segment_count == 3
 
-    def test_override_does_not_exceed_size_max(self, monkeypatch):
-        """Override value itself is clamped by size.max (REQ-003 sanity check)."""
+    def test_override_is_authoritative_over_size_max(self, monkeypatch):
+        """SKU_SEGMENT_OVERRIDES is the source of truth for known SKUs.
+
+        The size.max clamp applies to the API-reported count *before* the
+        override lookup, so an explicit override entry wins even when it
+        exceeds size.max. Operators adding a new override are responsible
+        for keeping it accurate; this is preferable to silently clamping a
+        known-good value.
+        """
         import custom_components.govee.models.device as device_module
 
         monkeypatch.setattr(
@@ -1469,5 +1465,23 @@ class TestSegmentCountOverride:
         )
         cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
         device = _make_rgbic_device("H7075", cap)
-        # Override says 5 but size.max is 3 → 3, never 5.
+        # Override says 5; size.max (3) clamps the api_count from 15 to 3
+        # but the explicit override still wins → 5.
+        assert device.segment_count == 5
+
+    def test_size_max_clamp_protects_unknown_sku(self, monkeypatch):
+        """Unknown SKU with bogus elementRange.max gets clamped by size.max.
+
+        This is the automatic safety-net path: when no override exists for
+        the SKU, size.max catches devices that follow the H7075
+        over-reporting pattern without requiring a manual dict entry.
+        """
+        import custom_components.govee.models.device as device_module
+
+        monkeypatch.setattr(
+            device_module, "SKU_SEGMENT_OVERRIDES", {},
+        )
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
+        device = _make_rgbic_device("H9999", cap)
+        # No override → api_count (15) is clamped by size.max (3) → 3.
         assert device.segment_count == 3
