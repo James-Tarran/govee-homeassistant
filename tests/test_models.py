@@ -26,6 +26,7 @@ from custom_components.govee.models.device import (
     CAPABILITY_RANGE,
     CAPABILITY_COLOR_SETTING,
     CAPABILITY_DYNAMIC_SCENE,
+    CAPABILITY_SEGMENT_COLOR,
     CAPABILITY_TOGGLE,
     CAPABILITY_WORK_MODE,
     CAPABILITY_MODE,
@@ -1333,3 +1334,140 @@ class TestCommands:
         assert cmd.get_value() == 0
         payload = cmd.to_api_payload()
         assert payload["value"] == 0
+
+
+# ==============================================================================
+# TestSegmentCountOverride — H7075 SKU override + size.max clamp (REQ-001..004)
+# ==============================================================================
+
+
+def _make_rgbic_segment_capability(
+    *,
+    element_range_max: int | None = 14,
+    size_max: int | None = None,
+    segment_count: int | None = None,
+) -> GoveeCapability:
+    """Build an RGBIC ``segment_color_setting`` capability for tests.
+
+    Models the fields/elementRange/size/segmentCount shapes that drive
+    ``GoveeDevice.segment_count``. Only the fields the parser + the new
+    property actually read are populated; the rest mirror the live API
+    shape so the existing parser tests still apply.
+    """
+    fields: list[dict] = []
+    if element_range_max is not None or size_max is not None:
+        field: dict = {"fieldName": "segment"}
+        if element_range_max is not None:
+            field["elementRange"] = {"min": 0, "max": element_range_max}
+        if size_max is not None:
+            field["size"] = {"min": 1, "max": size_max}
+        fields.append(field)
+    params: dict = {"dataType": "STRUCT", "fields": fields}
+    if segment_count is not None:
+        params["segmentCount"] = segment_count
+    return GoveeCapability(
+        type=CAPABILITY_SEGMENT_COLOR,
+        instance="segmentedColorRgb",
+        parameters=params,
+    )
+
+
+def _make_rgbic_device(
+    sku: str,
+    capability: GoveeCapability,
+    device_id: str = "AA:BB:CC:DD:EE:FF:00:99",
+) -> GoveeDevice:
+    """Build a minimal RGBIC GoveeDevice for segment_count tests."""
+    return GoveeDevice(
+        device_id=device_id,
+        sku=sku,
+        name=f"Test {sku}",
+        device_type="devices.types.light",
+        capabilities=(capability,),
+        is_group=False,
+    )
+
+
+class TestSegmentCountOverride:
+    """Test GoveeDevice.segment_count with SKU_SEGMENT_OVERRIDES + size.max clamp.
+
+    The H7075 LED strip reports elementRange.max=14 (so 15 by the legacy
+    parser) but only has 3 physical sections, and exposes size.max=3.
+    ``SKU_SEGMENT_OVERRIDES`` collapses this to 3; size.max is the
+    defensive clamp for any future SKU the override table hasn't seen yet.
+    """
+
+    def test_h7075_returns_3_segments(self):
+        """H7075 with elementRange.max=14 + size.max=3 collapses to 3 (REQ-001)."""
+        cap = _make_rgbic_segment_capability(
+            element_range_max=14, size_max=3,
+        )
+        device = _make_rgbic_device("H7075", cap)
+        assert device.segment_count == 3
+
+    def test_unknown_sku_returns_api_count(self):
+        """SKUs not in the override table keep the parser's API count (REQ-002)."""
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=None)
+        device = _make_rgbic_device("H6000", cap)
+        assert device.segment_count == 15
+
+    def test_size_max_clamp_without_override(self):
+        """size.max clamps the API count when no override exists (REQ-001 defense)."""
+        cap = _make_rgbic_segment_capability(element_range_max=20, size_max=15)
+        device = _make_rgbic_device("H6000", cap)
+        assert device.segment_count == 15
+
+    def test_size_max_clamp_with_override(self, monkeypatch):
+        """When override > size.max, size.max wins (REQ-003)."""
+        import custom_components.govee.models.device as device_module
+
+        monkeypatch.setattr(
+            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 5},
+        )
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
+        device = _make_rgbic_device("H7075", cap)
+        assert device.segment_count == 3
+
+    def test_sku_uppercase_normalization(self, monkeypatch):
+        """SKU lookup is case-insensitive: 'h7075' resolves identically to 'H7075' (REQ-004)."""
+        import custom_components.govee.models.device as device_module
+
+        monkeypatch.setattr(
+            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 3},
+        )
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
+        device = _make_rgbic_device("h7075", cap)
+        assert device.segment_count == 3
+
+    def test_segmentCount_direct_wins_when_no_override(self):
+        """API ``segmentCount`` parameter is respected when SKU has no override (REQ-002)."""
+        cap = _make_rgbic_segment_capability(
+            element_range_max=None, size_max=None, segment_count=10,
+        )
+        device = _make_rgbic_device("H7028", cap)
+        assert device.segment_count == 10
+
+    def test_override_wins_over_segmentCount(self, monkeypatch):
+        """Override is the source of truth even when API exposes segmentCount (REQ-001)."""
+        import custom_components.govee.models.device as device_module
+
+        monkeypatch.setattr(
+            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 3},
+        )
+        cap = _make_rgbic_segment_capability(
+            element_range_max=None, size_max=None, segment_count=10,
+        )
+        device = _make_rgbic_device("H7075", cap)
+        assert device.segment_count == 3
+
+    def test_override_does_not_exceed_size_max(self, monkeypatch):
+        """Override value itself is clamped by size.max (REQ-003 sanity check)."""
+        import custom_components.govee.models.device as device_module
+
+        monkeypatch.setattr(
+            device_module, "SKU_SEGMENT_OVERRIDES", {"H7075": 5},
+        )
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=3)
+        device = _make_rgbic_device("H7075", cap)
+        # Override says 5 but size.max is 3 → 3, never 5.
+        assert device.segment_count == 3
