@@ -2631,6 +2631,65 @@ DIY Styles:
 - `0x03` = Marquee
 - `0x04` = Music reactive
 
+### 9.6 SKU Segment Count Overrides
+
+The Govee API exposes RGBIC segment counts through three different shapes
+inside `devices.capabilities.segment_color_setting.parameters`:
+
+1. A direct `segmentCount` integer.
+2. `fields[].elementRange.max` — a **0-based** max index (so `max = 14` ⇒ 15
+   segments).
+3. `fields[].size.max` — the protocol-level array-size ceiling.
+
+For most SKUs the parser picks the first shape that yields a value, and
+`elementRange.max + 1` is what the device actually has. **A handful of SKUs
+over-report in `elementRange` while `size.max` matches the physical sections.**
+The H7075 is the first observed case: `elementRange.max = 14` (so the
+parser would return 15) but `size.max = 3` and the device really only has
+3 physical sections. Spawning 15 segment entities on a 3-section strip
+produces 12 phantom `light.<name>_segment_{3..14}` entities that the
+cloud silently rejects, which then get stuck on whatever color the
+optimistic state happened to set.
+
+The integration handles this with a two-layer correction in
+`custom_components/govee/models/device.py` (`GoveeDevice.segment_count`):
+
+1. **Authoritative override.** `SKU_SEGMENT_OVERRIDES` (in
+   `custom_components/govee/const.py`) maps a SKU to the physical
+   segment count, compared case-insensitively against `GoveeDevice.sku`.
+   When a SKU is present, the override wins regardless of what the API
+   returned for any of the three shapes. The first shipped entry is:
+
+   ```python
+   SKU_SEGMENT_OVERRIDES: Final = {
+       "H7075": 3,  # API reports 15 (elementRange.max=14), device has 3 physical sections
+   }
+   ```
+
+2. **Defensive clamp.** When `fields[].size.max` is present and the
+   effective count (override or API-derived) exceeds it, the property
+   returns `min(effective, size.max)`. This protects any future SKU that
+   exhibits the same bug but isn't in the override table yet — H7075
+   itself would already be capped to 3 by this clamp even without an
+   override entry, but the override makes the intent explicit and
+   survives API changes.
+
+The `govee.set_segment_color` service also validates its `segments` list
+against the same effective `segment_count` and logs a warning + early
+returns for out-of-range indices, instead of dispatching a command the
+cloud would refuse.
+
+**Adding a new SKU.** When you observe a SKU whose `elementRange.max` is
+higher than its physical section count, open a GitHub issue with the
+SKU, the captured API response, and the confirmed section count from the
+official Govee Android app. The change is a one-line entry in
+`SKU_SEGMENT_OVERRIDES` (with a rationale comment matching the H7075
+style), a test case in `TestSegmentCountOverride`, and a release note.
+Follow the same workflow as `FAHRENHEIT_REPORTING_SKUS` in the same
+file (issues #115 / #128 / #129 are precedents).
+
+Reference: see PR/issue placeholder for the H7075 fix.
+
 ---
 
 ## 11. PCAP Analysis Details
