@@ -385,6 +385,10 @@
     "mqtt_2fa_required": {
       "title": "Govee account requires verification",
       "description": "Your Govee account now requires email verification (2FA) to enable real-time MQTT updates for {entry_title}. Go to the integration page and select **Reconfigure** to re-enter your credentials with a verification code.\n\nThe integration will continue to work using polling until this is resolved."
+    },
+    "mqtt_token_expired": {
+      "title": "Govee account sign-in expired",
+      "description": "The saved Govee account sign-in for {entry_title} has expired, and signing in again was rejected \u2014 usually because the account password changed.\n\nWhile it is expired, battery levels and readings for sensors that reach Govee through a gateway (for example an H5310 or H5112 behind an H5044) stop updating. Lights and everything using the API key are unaffected.\n\nGo to the integration page and select **Reconfigure** to enter the current account password."
     }
   }
 }

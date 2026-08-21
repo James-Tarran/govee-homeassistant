@@ -239,6 +239,12 @@ SEGMENT_MODE_BOTH: Final = "both"
 CONFIG_VERSION: Final = 2
 
 # Keys for storing cached data in hass.data[DOMAIN]
+# Minimum gap between account re-login attempts after the BFF rejects the
+# stored token (issue #132). Repeated logins are what trips Govee's own 2FA
+# hardening, so a persistently failing account must back off rather than retry
+# on every 5-minute poll.
+IOT_RELOGIN_MIN_INTERVAL: Final = 900  # 15 minutes
+
 KEY_IOT_CREDENTIALS: Final = "iot_credentials"
 KEY_IOT_LOGIN_FAILED: Final = "iot_login_failed"
 
