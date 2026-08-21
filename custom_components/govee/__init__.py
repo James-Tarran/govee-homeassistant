@@ -232,11 +232,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeConfigEntry) -> boo
 
     # Store coordinator in entry
     entry.runtime_data = coordinator
-    # Snapshot the options this setup ran with. The update listener below fires
-    # on ANY entry update — including a data-only write such as a refreshed
-    # account token (#132) — and reloading for one of those would drop every
-    # entity for a background credential refresh.
-    coordinator.options_snapshot = dict(entry.options)
 
     # Subscribe to BLE advertisements for nearby Govee devices (transparent
     # local transport enhancement — no user configuration needed).
