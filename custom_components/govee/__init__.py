@@ -232,6 +232,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeConfigEntry) -> boo
 
     # Store coordinator in entry
     entry.runtime_data = coordinator
+    # Snapshot the options this setup ran with. The update listener below fires
+    # on ANY entry update — including a data-only write such as a refreshed
+    # account token (#132) — and reloading for one of those would drop every
+    # entity for a background credential refresh.
+    coordinator.options_snapshot = dict(entry.options)
 
     # Subscribe to BLE advertisements for nearby Govee devices (transparent
     # local transport enhancement — no user configuration needed).
@@ -503,8 +508,19 @@ async def _async_update_listener(
 ) -> None:
     """Handle options update.
 
-    Reloads the integration when options change.
+    Reloads the integration when options change — and only then. Home
+    Assistant fires update listeners for any ``async_update_entry`` call, so a
+    data-only write reaches here too. The integration writes ``entry.data`` at
+    runtime to store a refreshed account token (#132); reloading for that would
+    tear down every entity, drop the MQTT connection and re-fetch scenes, on a
+    cadence set by how often Govee expires a token.
     """
+    coordinator = getattr(entry, "runtime_data", None)
+    previous = getattr(coordinator, "options_snapshot", None)
+    if previous is not None and previous == dict(entry.options):
+        _LOGGER.debug("Entry updated without an options change — not reloading")
+        return
+
     _LOGGER.info("Options changed, reloading integration")
     _LOGGER.debug("Current options: %s", entry.options)
 
