@@ -65,9 +65,11 @@ from .api.lan_client import (
 )
 from .api.lan_control import command_to_lan, lan_brightness_to_device
 from .const import (
+    CONF_API_TEMPERATURE_UNIT,
     CONF_ENABLE_MQTT_CONTROL,
     CONF_LAN_TARGETS,
     CONF_WATER_DETECTOR_POLL_INTERVAL,
+    DEFAULT_API_TEMPERATURE_UNIT,
     DEFAULT_ENABLE_MQTT_CONTROL,
     DEFAULT_WATER_DETECTOR_POLL_INTERVAL,
     DEVICE_REDISCOVERY_INTERVAL,
@@ -81,6 +83,7 @@ from .const import (
     MAX_WATER_DETECTOR_POLL_INTERVAL,
     MIN_WATER_DETECTOR_POLL_INTERVAL,
     OPTIMISTIC_GRACE_CAP_SECONDS,
+    resolve_fahrenheit_conversion,
 )
 from .models import (
     GoveeDevice,
@@ -364,6 +367,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         self._water_full_changed_at: dict[str, datetime] = {}
         self._leak_hubs: dict[str, dict[str, Any]] = {}
         self._sno_to_sensor_id: dict[tuple[str, int], str] = {}
+        # (hub_device_id, sno) -> thermo device_id. The hub's multiSync thermo
+        # frames name their sub-device by slot only, so this is what turns an
+        # ee34/0x08 frame into a reading on the right entity (#151).
+        self._sno_to_thermo_id: dict[tuple[str, int], str] = {}
         # Last time the account device list was re-checked for newly added
         # devices (#101). Seeded to "now" so the first re-check waits a full
         # interval rather than firing right after setup discovery.
@@ -1878,6 +1885,21 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         if isinstance(fah_open, bool):
             self._display_fahrenheit[device_id] = fah_open
 
+    def _note_thermo_slot(self, device_id: str, sensor: dict[str, Any]) -> None:
+        """Map a gateway slot to this thermometer so its frames can be routed.
+
+        The hub's multiSync thermo frames carry only the slot (``sno``), never
+        the sub-device id, so without this pairing a decoded reading has
+        nowhere to go (issue #151). Registered for every BFF-listed
+        thermometer, including ones still on the Developer poll — the frame
+        path is a reading source, not an ownership claim.
+        """
+        hub_device_id = sensor.get("hub_device_id") or ""
+        sno = sensor.get("sno")
+        if not hub_device_id or not isinstance(sno, int) or isinstance(sno, bool):
+            return
+        self._sno_to_thermo_id[(hub_device_id, sno)] = device_id
+
     async def _discover_bff_thermometers(self) -> None:
         """Discover thermo-hygrometers (H5301) via the BFF device list (issue #86).
 
@@ -1909,6 +1931,7 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                     continue
 
                 self._note_display_unit(device_id, sensor)
+                self._note_thermo_slot(device_id, sensor)
 
                 # A device already discovered via the Developer API (e.g. the
                 # H5179 WiFi thermometer, #141) whose live reading only comes
@@ -2433,6 +2456,100 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         self._bff_poll_task = self.hass.async_create_task(self._poll_bff_leak_state())
 
     @callback
+    def _handle_thermo_frame(self, state_data: dict[str, Any]) -> None:
+        """Apply a decoded gateway thermometer frame (issue #151).
+
+        This is the live reading source for a gateway-bridged thermometer. It
+        matters most where nothing else works: when Govee leaves
+        ``deviceExt.lastDeviceData`` empty for the sub-device, the BFF path has
+        no value to serve and the Developer poll returns nothing either, so the
+        entity sits at ``unknown`` indefinitely. It also beats the BFF value on
+        freshness even when that path does work — the reporter measured the
+        H5044 pushing hourly at hh:56 with the cloud copy landing 5-7 minutes
+        later, and this frame IS that push.
+
+        The decode yields canonical °C, so the value is converted into whatever
+        unit the entity will read it back in rather than claiming ownership of
+        the device. That keeps this coexisting with the Developer poll — both
+        writers leave ``sensor_temperature`` in one consistent unit, and an
+        account whose poll works does not lose it if the gateway goes quiet.
+        """
+        hub_id = state_data["hub_device_id"]
+        sno = state_data["sensor_slot"]
+
+        device_id = self._sno_to_thermo_id.get((hub_id, sno))
+        if not device_id:
+            _LOGGER.debug(
+                "Thermo frame for unmapped sensor: hub=%s slot=%d temp=%.1f°C",
+                hub_id,
+                sno,
+                state_data["temperature_c"],
+            )
+            return
+
+        device = self._devices.get(device_id)
+        if device is None:
+            return
+
+        state = self._states.get(device_id) or GoveeDeviceState.create_empty(device_id)
+        previous_temperature = state.sensor_temperature
+
+        state.sensor_temperature = self._thermo_frame_temperature(
+            device_id, device.sku, state_data["temperature_c"]
+        )
+        if state_data.get("battery") is not None:
+            state.battery = state_data["battery"]
+        # The frame is proof of life from the sub-device itself. Govee's own
+        # ``online`` flag flaps false between the hourly uploads (#97), so a
+        # frame arriving is the better signal.
+        state.online = True
+        self._states[device_id] = state
+
+        # Last *change*, not last confirmation — same semantic as the poll
+        # path's _note_sensor_reading_change (#83). The first frame stamps too.
+        if (
+            previous_temperature != state.sensor_temperature
+            or device_id not in self._sensor_reading_changed_at
+        ):
+            self._sensor_reading_changed_at[device_id] = dt_util.utcnow()
+
+        self._ensure_transport_health(device_id)
+        self._record_transport_success(device_id, "mqtt")
+
+        _LOGGER.debug(
+            "Thermo frame applied to %s: %.1f°C (stored %.1f) battery=%s",
+            device.name,
+            state_data["temperature_c"],
+            state.sensor_temperature,
+            state.battery,
+        )
+        self.async_set_updated_data(self._states)
+
+    def _thermo_frame_temperature(
+        self, device_id: str, sku: str, celsius: float
+    ) -> float:
+        """Put a decoded °C reading into the unit the entity expects.
+
+        The temperature sensor converts °F→°C for SKUs in
+        FAHRENHEIT_REPORTING_SKUS — which includes the H5310 — unless the
+        device is BFF-owned, in which case it trusts the stored value as °C.
+        Writing raw °C into the first case would surface a pool at 24.9 °C as
+        -4 °C, so the value is pre-converted to match (the same round-tripping
+        the BFF read path does, #96/#83).
+        """
+        if self.is_bff_thermometer(device_id):
+            return celsius
+
+        api_unit = self._config_entry.options.get(
+            CONF_API_TEMPERATURE_UNIT,
+            DEFAULT_API_TEMPERATURE_UNIT,
+        )
+        unit_hint = self.account_temperature_unit(device_id)
+        if resolve_fahrenheit_conversion(sku, api_unit, unit_hint):
+            return celsius * (9.0 / 5.0) + 32.0
+        return celsius
+
+    @callback
     def _handle_button_press(self, state_data: dict[str, Any]) -> None:
         """Handle a button press event from MQTT multiSync message."""
         sensor_id = state_data["device_id"]
@@ -2461,6 +2578,11 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # Handle leak sensor events (from multiSync messages)
         if state_data.get("_leak_event"):
             self._handle_leak_event(state_data)
+            return
+
+        # Handle gateway-bridged thermometer frames (issue #151)
+        if state_data.get("_thermo_frame"):
+            self._handle_thermo_frame(state_data)
             return
 
         # Handle button press events
