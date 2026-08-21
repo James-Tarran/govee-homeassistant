@@ -227,6 +227,46 @@ def parse_lan_device_overrides(raw: str | None) -> dict[str, tuple[str, bool]]:
     return overrides
 
 
+def validate_lan_device_overrides(raw: str | None) -> dict[str, tuple[str, bool]]:
+    """Strict counterpart to :func:`parse_lan_device_overrides`, for the form.
+
+    Runtime parsing is deliberately lenient — one bad token must never stop the
+    other overrides from binding, the same contract the scan-target path uses.
+    That leniency is wrong at the options form, though: a mistyped IP would
+    save cleanly and then do nothing, leaving the user with an accepted form,
+    a stored option, and a device that never works. The existing targets
+    validation exists for exactly this reason ("rejected in the form, not
+    silently dropped at scan time", #57), so overrides get the same treatment.
+
+    Raises ``LanTargetError`` on an override token with an empty device_id, an
+    empty IP, or an unparseable IP. Returns the parsed overrides so the caller
+    can run checks this module can't — notably whether each device_id is a
+    device on the account.
+    """
+    overrides: dict[str, tuple[str, bool]] = {}
+    if not raw:
+        return overrides
+
+    for token in raw.replace(",", " ").split():
+        if "=" not in token:
+            continue
+        device_id, _, value = token.partition("=")
+        device_id = device_id.strip()
+        write_only = value.endswith("!")
+        ip = (value[:-1] if write_only else value).strip()
+        if not device_id:
+            raise LanTargetError(f"'{token}' is missing a device ID before the '='")
+        if not ip:
+            raise LanTargetError(f"'{token}' is missing an IP address after the '='")
+        try:
+            IPv4Address(ip)
+        except (AddressValueError, ValueError) as err:
+            raise LanTargetError(f"'{ip}' in '{token}' is not a valid IP address") from err
+        overrides[device_id] = (ip, write_only)
+
+    return overrides
+
+
 async def async_get_lan_interface_ips(hass: HomeAssistant) -> list[str]:
     """Return the host's enabled, non-loopback IPv4 source IPs as strings.
 
