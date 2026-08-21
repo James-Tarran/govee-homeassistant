@@ -216,6 +216,9 @@
       "sensor_temperature": {
         "name": "Temperature"
       },
+      "sensor_temperature_2": {
+        "name": "Probe 2 temperature"
+      },
       "sensor_humidity": {
         "name": "Humidity"
       },

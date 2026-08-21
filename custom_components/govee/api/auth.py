@@ -243,6 +243,19 @@ _BFF_HUMIDITY_KEYS = (
     ("sensorHumidity", False),
     ("currentHumidity", False),
 )
+# Second temperature probe. Dual-probe SKUs (the H5112 fridge/freezer
+# thermometer, issue #150) report each probe separately: ``tem`` is probe 1 and
+# ``tem2`` is probe 2, and the settings carry a matching second set of
+# ``probeName2`` / ``temMin2`` / ``temMax2`` / ``temCali2`` fields.
+#
+# Either probe can be absent independently — an unplugged probe 1 reports the
+# ``-1`` sentinel while probe 2 reads normally. Reporter diagnostics on #150
+# showed exactly that on two of three units, which is why they surfaced no
+# temperature at all despite a working probe.
+_BFF_TEMP2_KEYS = (
+    ("tem2", True),
+    ("temperature2", False),
+)
 
 # u16 "no reading / no sensor" sentinels Govee reports for a missing centi value
 # (e.g. the H5310 pool thermometer has no hygrometer and reports hum == 0xFFFF,
@@ -804,7 +817,8 @@ class GoveeAuthClient:
 
         Returns:
             List of dicts, each with keys: device_id, name, sku, sw_version,
-            hw_version, battery, online, temperature (°C or None), humidity
+            hw_version, battery, online, temperature (°C or None),
+            temperature_2 (°C or None — dual-probe SKUs, #150), humidity
             (%RH or None), hub_device_id, hub_sku, sno.
         """
         if self._session is None:
@@ -924,6 +938,7 @@ class GoveeAuthClient:
                             "battery": settings.get("battery"),
                             "online": ld.get("online", True),
                             "temperature": _bff_reading(ld, _BFF_TEMP_KEYS),
+                            "temperature_2": _bff_reading(ld, _BFF_TEMP2_KEYS),
                             "humidity": _bff_reading(ld, _BFF_HUMIDITY_KEYS),
                             "hub_device_id": gateway_info.get("device", ""),
                             "hub_sku": gateway_info.get("sku", ""),

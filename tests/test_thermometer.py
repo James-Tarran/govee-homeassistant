@@ -195,6 +195,9 @@ class TestTemperatureSensorFahrenheitConversion:
             coordinator=coordinator,
             _device=SimpleNamespace(sku=sku),
             _device_id="AA:BB:CC:DD:EE:FF:00:11",
+            # native_value reads the stored value through this hook so the
+            # second probe reuses the same conversion path (#150).
+            _raw_reading=raw_value,
         )
         return GoveeTemperatureSensor.native_value.fget(stub)
 
@@ -247,6 +250,7 @@ class TestTemperatureSensorFahrenheitConversion:
             coordinator=coordinator,
             _device=SimpleNamespace(sku="H5109"),
             _device_id="AA:BB:CC:DD:EE:FF:00:11",
+            _raw_reading=state.sensor_temperature,
         )
         # Default is auto -> known °F SKU converts.
         result = GoveeTemperatureSensor.native_value.fget(stub)
@@ -271,6 +275,7 @@ class TestTemperatureSensorFahrenheitConversion:
             coordinator=coordinator,
             _device=SimpleNamespace(sku="H5179"),
             _device_id="AA:BB:CC:DD:EE:FF:00:11",
+            _raw_reading=state.sensor_temperature,
         )
         assert GoveeTemperatureSensor.native_value.fget(stub) == 4.9
 

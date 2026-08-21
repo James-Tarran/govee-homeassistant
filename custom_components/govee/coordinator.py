@@ -339,6 +339,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # sensor missed at startup (issue #132), so a slow tick doesn't queue a
         # reload every 5 minutes while the reload is pending.
         self._battery_reload_scheduled = False
+        # Same one-shot guard for a second temperature probe that starts
+        # reporting after startup — plugging one in must not need a manual
+        # restart to get its entity (#150).
+        self._probe2_reload_scheduled = False
         # Leak sensor subsystem
         self._leak_sensors: dict[str, GoveeLeakSensor] = {}
         self._leak_states: dict[str, GoveeLeakSensorState] = {}
@@ -683,10 +687,15 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         semantic is last *change*, not last confirmation. First reading stamps
         too (device not yet in the map).
         """
-        if new_state.sensor_temperature is None and new_state.sensor_humidity is None:
+        if (
+            new_state.sensor_temperature is None
+            and new_state.sensor_temperature_2 is None
+            and new_state.sensor_humidity is None
+        ):
             return
         reading_changed = (
             new_state.sensor_temperature != existing_state.sensor_temperature
+            or new_state.sensor_temperature_2 != existing_state.sensor_temperature_2
             or new_state.sensor_humidity != existing_state.sensor_humidity
         )
         if reading_changed or device_id not in self._sensor_reading_changed_at:
@@ -2162,6 +2171,7 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                 if device_id in self._devices:
                     if (
                         sensor.get("temperature") is None
+                        and sensor.get("temperature_2") is None
                         and sensor.get("humidity") is None
                     ):
                         _LOGGER.debug(
@@ -2179,6 +2189,8 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                     state.online = sensor.get("online", state.online)
                     if sensor.get("temperature") is not None:
                         state.sensor_temperature = sensor.get("temperature")
+                    if sensor.get("temperature_2") is not None:
+                        state.sensor_temperature_2 = sensor.get("temperature_2")
                     if sensor.get("humidity") is not None:
                         state.sensor_humidity = sensor.get("humidity")
                     if sensor.get("battery") is not None:
@@ -2208,6 +2220,7 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                 state = GoveeDeviceState.create_empty(device_id)
                 state.online = sensor.get("online", True)
                 state.sensor_temperature = sensor.get("temperature")
+                state.sensor_temperature_2 = sensor.get("temperature_2")
                 state.sensor_humidity = sensor.get("humidity")
                 state.battery = sensor.get("battery")
                 self._states[device_id] = state
@@ -2258,7 +2271,11 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             # A device parked on the Developer poll because the BFF had nothing
             # for it (#151) takes over here as soon as a reading appears.
             if device_id in self._bff_thermo_pending:
-                if sensor.get("temperature") is None and sensor.get("humidity") is None:
+                if (
+                    sensor.get("temperature") is None
+                    and sensor.get("temperature_2") is None
+                    and sensor.get("humidity") is None
+                ):
                     continue
                 _LOGGER.info(
                     "BFF now reports %s — taking over its readings from the "
@@ -2280,6 +2297,28 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                 if sensor.get("temperature") is not None
                 else existing.sensor_temperature
             )
+            new_state.sensor_temperature_2 = (
+                sensor.get("temperature_2")
+                if sensor.get("temperature_2") is not None
+                else existing.sensor_temperature_2
+            )
+            # A probe plugged in after startup has no entity yet: the sensor
+            # platform only creates one when a reading is already present.
+            # Reload once so it appears, mirroring the late-battery path (#150).
+            if (
+                existing.sensor_temperature_2 is None
+                and new_state.sensor_temperature_2 is not None
+                and not self._probe2_reload_scheduled
+            ):
+                self._probe2_reload_scheduled = True
+                _LOGGER.info(
+                    "Second temperature probe now reporting for %s — reloading "
+                    "the integration to add its sensor (#150)",
+                    sensor.get("name", device_id),
+                )
+                self.hass.config_entries.async_schedule_reload(
+                    self._config_entry.entry_id
+                )
             new_state.sensor_humidity = (
                 sensor.get("humidity")
                 if sensor.get("humidity") is not None
