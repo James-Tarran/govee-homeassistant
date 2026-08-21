@@ -2497,39 +2497,57 @@ Battery thermo-hygrometer that reaches the cloud through an **H5044 gateway**; n
 - The pool probe is **temperature-only**: `sensorHumidity` comes back as `655.35` (= `0xFFFF / 100`, a "no-data" sentinel). Treat the sentinel as unavailable rather than a real 655% reading (#100).
 - Rides the gateway with **no direct MQTT topic** (`device_topic_count=0`); the H5044 pushes 20-byte `ee34…` multi-sync frames. Richer cached state (`tem`/`hum`/`avgDay…`) is in BFF `lastDeviceData`.
 
-##### Thermo `ee34` frame layout — partially decoded (issues #151, #157)
+##### Thermo `ee34` frame layout — decoded (issues #151, #157)
 
-An H5044 bridging an H5310 pushes an `ee34` frame every ~10 minutes. The
-integration currently decodes `0xEE 0x34` **only** as a leak/dry report, so these
-frames are recorded into the `recent_multisync` diagnostics ring and then
-discarded — which is why a gateway-bridged H5310 whose BFF `lastDeviceData` is
-empty has no reading source at all (#151).
-
-Analysis of 64 consecutive frames from one H5310 (#157 diagnostics, 2026-08-11):
+An H5044 bridging an H5310 pushes an `ee34` frame every ~10 minutes (some
+accounts see one per hour, at hh:56). These frames are the **origin** of the
+reading everything else mirrors: the cloud copy in BFF `lastDeviceData` lands
+5–7 minutes later, and for some accounts Govee never fills it at all, leaving a
+gateway-bridged H5310 with no reading source whatsoever (#151).
 
 ```
-ee 34 00 08 00 64 25 14 A8 6A 7A B5 BE C5 82 CC FF 20 00 60
-└──┬──┘ └─────┬─────┘ └┬ └─────┬─────┘ └┬ └────┬────┘ └┬ └┬
- header    constant    ?    epoch ts    ?   constant   ?  cksum
+ee 34 00 08 00 64 29 15 c2 6a 7e ca 3c 89 ba cc ff 80 00 2a
+└──┬──┘ │  │  │  └──┬──┘ └────┬────┘ │  └────┬────┘ └─┬─┘ │
+ header │  │  │   per-dev   epoch ts   │    per-dev    ?  cksum
+        │  │  battery              temperature
+        │  sub-device class
+        slot (sno)
 ```
 
 | Byte | Finding |
 |------|---------|
-| `0-1` | `0xEE 0x34` header |
-| `2-7` | Constant across every frame (`00 08 00 64 25 14`) — note `0x64` sits where the leak decoder reads battery |
-| `8` | Varies 147-168 across the day, **not** monotone with temperature |
-| `9-12` | **Big-endian Unix epoch seconds**, matching the receive time exactly — confirmed on all 64 frames |
-| `13` | Varies 196-201, **rising monotonically as the day warms** — the temperature candidate |
-| `14-18` | Constant (`82 CC FF 20 00`) |
+| `0-1` | `0xEE 0x34` header — shared with leak reports |
+| `2` | Slot (`sno`) of the sub-device on the gateway |
+| `3` | **Sub-device class: `0x02` = leak sensor, `0x08` = thermometer.** The only byte separating the two frame types |
+| `4-5` | `00 64` — byte 5 is battery %, same slot both frame types use |
+| `6-8` | Per-device constants; byte `8` varies without tracking temperature |
+| `9-12` | **Big-endian Unix epoch seconds.** Within 3 s of receive time across all 44 frames of the #151 capture |
+| `13` | **Temperature: `T[°C] = (byte13 + 112) / 10`** |
+| `14-18` | Per-device constants (`ba cc ff 80 00` here, `82 cc ff 20 00` on the #157 unit) |
 | `19` | Checksum (XOR-style, varies with payload) |
 
-**Not yet decodable.** Byte `13` is temperature-shaped, but the capture carries
-only ONE labelled reading (88.34 °F at the end of the window), and both
-`°F + 113` and `°C + 170` reproduce it exactly. The day's 5-unit swing fits °F
-better than °C for a pool, but that is an argument from plausibility, not proof.
-Shipping either would surface confidently wrong pool temperatures, so the decode
-stays unimplemented until a capture pairs several frames with the temperature the
-Govee app showed at those times.
+**How byte 13 was settled.** @Araknus13 paired 30 on-the-hour frames against
+their own logged cloud history for the same probe — pool water, 24.4–29.5 °C
+over 31 hours. Least squares gives `T = 0.10010 * b13 + 11.1647`, i.e. exactly
+0.1 °C per count, reproducing every point within 0.1 K. The two candidates from
+#157's single-labelled-point capture miss the same data by 19.3 K (`°F + 113`)
+and 38.1 K (`°C + 170`); they had looked indistinguishable only because they
+intersect at 31.25 °C = 88.25 °F, right where that lone 88.34 °F reading sat.
+The formula independently reproduces that #157 point from a different account.
+
+**Known limits.** Byte 13 is unsigned, so the representable span is
+11.2–36.7 °C and the validating capture only covers 24–30 °C — behaviour at
+the ends (whether the byte saturates, or a sign/scale switch exists for
+sub-11 °C readings) is unverified. `0x00` and `0xFF` are treated as the
+frame's own no-data markers rather than 11.2/36.7 °C readings.
+
+**Implementation.** `_decode_thermo_frame` in `api/mqtt.py` diverts byte-3
+`0x08` frames ahead of the leak branch — leak decoding stays the default for
+every other sub-device class, so an unknown leak SKU can never be silenced by
+the discrimination. `coordinator._handle_thermo_frame` routes the reading via
+`(gateway, sno) → device_id` and normalizes the decoded °C into the unit the
+entity reads back, so the frame path coexists with the Developer poll instead
+of claiming ownership of the device.
 
 #### H616C — LED Strip (NOT yet in Developer API backend)
 
