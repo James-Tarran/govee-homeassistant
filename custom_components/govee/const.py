@@ -89,8 +89,22 @@ FAHRENHEIT_REPORTING_SKUS: Final = frozenset(
 # Some Govee devices report a higher segment count via the API than
 # the physical sections on the device. This dict pins the real count
 # per SKU. Add a new entry when the API is observed to misreport.
+#
+# This is also the escape hatch for the size.max clamp in
+# GoveeDevice.segment_count. That clamp reads fields[].size.max as a ceiling on
+# the segment count, but the field is documented as the max array *length*
+# accepted in one command. On every capture we hold the two agree
+# (size.max == elementRange.max + 1), so the clamp only ever fires on the
+# inconsistency that signals the bug. If a device ever reports a genuine
+# per-command batch limit below its real segment count, the clamp would drop
+# working entities — pin the true count here to override it.
 SKU_SEGMENT_OVERRIDES: Final = {
     "H7075": 3,  # API reports 15 (elementRange.max=14), device has 3 physical sections
+    # H7076 Outdoor Up/Down Wall Light: API reports 15 and size.max is 15 too,
+    # so the clamp can't catch it. Indices 0-3 are the only ones that move the
+    # light (0=top, 1=bottom, 2=part of the left side, 3=everything else);
+    # 4-14 are accepted with HTTP 200 "success" and do nothing (issue #160).
+    "H7076": 4,
 }
 
 

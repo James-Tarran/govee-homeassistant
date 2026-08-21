@@ -12,7 +12,7 @@ from typing import Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from custom_components.govee.const import SKU_SEGMENT_OVERRIDES
+from ..const import SKU_SEGMENT_OVERRIDES
 
 _LOGGER = logging.getLogger(__name__)
 

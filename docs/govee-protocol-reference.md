@@ -2663,17 +2663,42 @@ applied in this order:
    out at 3 from this clamp alone; the override (step 2) makes the
    intent explicit and survives API shape changes.
 
+   **Caveat.** `size.max` is documented in the API as the maximum array
+   *length* accepted in one command, not the segment count. On every
+   capture we hold, the two agree (`size.max == elementRange.max + 1`),
+   so the clamp only fires on the inconsistency that signals the bug.
+   Should a device ever advertise a genuine per-command batch limit
+   below its real segment count, the clamp would remove working
+   entities — pin the true count in `SKU_SEGMENT_OVERRIDES` to override
+   it.
+
 2. **Authoritative override.** `SKU_SEGMENT_OVERRIDES` (in
    `custom_components/govee/const.py`) maps a SKU to the physical
    segment count, compared case-insensitively against `GoveeDevice.sku`.
    When a SKU is present, the override wins over any clamp-derived
-   value. The first shipped entry is:
+   value. The shipped entries are:
 
    ```python
    SKU_SEGMENT_OVERRIDES: Final = {
        "H7075": 3,  # API reports 15 (elementRange.max=14), device has 3 physical sections
+       "H7076": 4,  # API reports 15 AND size.max 15; only indices 0-3 do anything
    }
    ```
+
+**When the clamp can't help.** The H7076 Outdoor Up/Down Wall Light is
+the counter-case to the H7075: it reports `elementRange.max = 14` *and*
+`size.max = 15`, so the two agree and the clamp is a no-op. Only indices
+0–3 physically move the light — `0` = top, `1` = bottom, `2` = part of
+the left side, `3` = everything else — while `4`–`14` are accepted with
+HTTP 200 `"success"` and do nothing (#160). A SKU like this can only be
+corrected by an explicit override entry.
+
+Note that the override caps entities at the count the *cloud API* can
+address, which is not necessarily what the Govee app can reach. The
+H7076's app exposes 17 selectable segments per side over BLE; the cloud
+`segmentedColorRgb` capability collapses all of that into 4 indices, and
+no integration change can recover the finer granularity while the
+capability is the only channel available.
 
 The `govee.set_segment_color` service also validates its `segments` list
 against the same effective `segment_count` and logs a warning + early
@@ -2698,7 +2723,7 @@ deleted from **Settings → Devices & Services → Entities** (filter by
 operation per affected device — the fix only prevents *future* phantom
 entities; it does not retroactively purge existing ones.
 
-Reference: see PR/issue placeholder for the H7075 fix.
+Reference: #160 (H7076), PR #161 (H7075).
 
 ---
 

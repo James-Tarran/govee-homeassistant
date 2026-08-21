@@ -1405,6 +1405,17 @@ class TestSegmentCountOverride:
         device = _make_rgbic_device("H7075", cap)
         assert device.segment_count == 3
 
+    def test_h7076_returns_4_segments_where_the_clamp_cannot_help(self):
+        """H7076 reports elementRange.max=14 AND size.max=15 (issue #160).
+
+        The counter-case to the H7075: the two fields agree, so the clamp is a
+        no-op and only the explicit override collapses the count. Indices 4-14
+        are accepted by the cloud with HTTP 200 "success" and move nothing.
+        """
+        cap = _make_rgbic_segment_capability(element_range_max=14, size_max=15)
+        device = _make_rgbic_device("H7076", cap)
+        assert device.segment_count == 4
+
     def test_unknown_sku_returns_api_count(self):
         """SKUs not in the override table keep the parser's API count (REQ-002)."""
         cap = _make_rgbic_segment_capability(element_range_max=14, size_max=None)
